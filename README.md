@@ -102,6 +102,8 @@ MCP-сервер Boost запускается на вашей машине, а �
 | DELETE | `/api/bookings/{id}` | Отменить бронь |
 | GET | `/api/rooms/{room}/bookings/today` | Брони комнаты на сегодня |
 
+Автор брони определяется по токену: поле `user_id` в теле запроса игнорируется.
+
 Пример:
 
 ```sh
@@ -109,7 +111,26 @@ curl -X POST http://localhost:8000/api/bookings \
   -H "Authorization: Bearer anna-token" \
   -H "Accept: application/json" \
   -H "Content-Type: application/json" \
-  -d '{"room_id": 1, "user_id": 1, "title": "Планёрка", "starts_at": "2026-11-02T10:00:00+03:00", "ends_at": "2026-11-02T11:00:00+03:00"}'
+  -d '{"room_id": 1, "title": "Планёрка", "starts_at": "2026-11-02T10:00:00+03:00", "ends_at": "2026-11-02T11:00:00+03:00"}'
 ```
 
 Лог созданных броней пишется в `storage/logs/bookings.log`.
+
+## Конкурентность
+
+Создание брони выполняется в транзакции. Перед проверкой пересечения строка комнаты блокируется через `SELECT ... FOR UPDATE`, поэтому одновременные запросы на одну комнату обрабатываются последовательно.
+
+Дополнительно пересечения запрещены на уровне PostgreSQL:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+ALTER TABLE bookings
+    ADD CONSTRAINT bookings_no_overlap
+    EXCLUDE USING gist (
+        room_id WITH =,
+        tsrange(starts_at, ends_at, '[)') WITH &&
+    );
+```
+
+Полуоткрытый интервал `[)` разрешает встречи «впритык», а `&&` ловит реальное пересечение. Если ограничение срабатывает, API возвращает 422 «Комната занята в это время». Для проверки пересечений также добавлен индекс `(room_id, starts_at)`.
