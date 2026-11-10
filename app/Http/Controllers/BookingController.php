@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\StoreBookingRequest;
 use App\Models\Booking;
 use App\Models\Room;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -29,27 +30,33 @@ class BookingController extends Controller
         $user = $request->user();
         $title = trim($request->string('title')->toString());
 
-        $booking = DB::transaction(function () use ($room, $startsAt, $endsAt, $user, $title): Booking {
-            Room::whereKey($room->id)->lockForUpdate()->firstOrFail();
+        try {
+            $booking = DB::transaction(function () use ($room, $startsAt, $endsAt, $user, $title): Booking {
+                Room::whereKey($room->id)->lockForUpdate()->firstOrFail();
 
-            $isOccupied = Booking::query()
-                ->whereBelongsTo($room)
-                ->overlapping($startsAt, $endsAt)
-                ->exists();
+                $isOccupied = Booking::query()
+                    ->whereBelongsTo($room)
+                    ->overlapping($startsAt, $endsAt)
+                    ->exists();
 
-            if ($isOccupied) {
-                throw ValidationException::withMessages([
-                    'starts_at' => 'Комната занята в это время.',
+                if ($isOccupied) {
+                    throw $this->roomOccupied();
+                }
+
+                return $user->bookings()->create([
+                    'room_id' => $room->id,
+                    'title' => $title,
+                    'starts_at' => $startsAt,
+                    'ends_at' => $endsAt,
                 ]);
+            });
+        } catch (QueryException $exception) {
+            if ($exception->getCode() === '23P01') {
+                throw $this->roomOccupied();
             }
 
-            return $user->bookings()->create([
-                'room_id' => $room->id,
-                'title' => $title,
-                'starts_at' => $startsAt,
-                'ends_at' => $endsAt,
-            ]);
-        });
+            throw $exception;
+        }
 
         Log::channel('bookings')->info('Booking created', ['booking_id' => $booking->id]);
 
@@ -83,5 +90,12 @@ class BookingController extends Controller
                 'time' => $b->starts_at.' – '.$b->ends_at,
                 'author' => $b->user->name,
             ]);
+    }
+
+    private function roomOccupied(): ValidationException
+    {
+        return ValidationException::withMessages([
+            'starts_at' => 'Комната занята в это время.',
+        ]);
     }
 }
