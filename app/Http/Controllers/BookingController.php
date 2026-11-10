@@ -7,6 +7,7 @@ use App\Models\Booking;
 use App\Models\Room;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -55,9 +56,20 @@ class BookingController extends Controller
         return response()->json($booking, 201);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, Booking $booking): Response
     {
-        Booking::findOrFail($id)->delete();
+        abort_unless(
+            $booking->user_id === $request->user()->id,
+            403,
+            'Отменить бронь может только её автор.',
+        );
+
+        $booking->delete();
+
+        Log::channel('bookings')->info('Booking cancelled', [
+            'booking_id' => $booking->id,
+            'user_id' => $request->user()->id,
+        ]);
 
         return response()->noContent();
     }
